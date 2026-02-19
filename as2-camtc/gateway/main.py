@@ -13,6 +13,8 @@ from pathlib import Path
 import httpx
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import PlainTextResponse
+from prometheus_client import Counter, Histogram, Gauge, generate_latest, CONTENT_TYPE_LATEST
 
 # Ensure project root on path
 ROOT = Path(__file__).resolve().parent.parent
@@ -40,6 +42,13 @@ GANACHE_URL = os.environ.get("GANACHE_URL", "http://localhost:8545")
 ledger: BlockchainLedger = None
 connector: BlockchainConnector = None
 _byzantine_ids: list = []
+
+# --- Prometheus metrics ---
+GW_TX_COUNT = Counter("gateway_tx_total", "Total transactions submitted", ["domain", "tier"])
+GW_TX_LATENCY = Histogram("gateway_tx_latency_seconds", "End-to-end tx latency", ["domain"], buckets=[0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5])
+GW_BLOCKS_FINALIZED = Counter("gateway_blocks_finalized_total", "Total blocks finalized", ["tier"])
+GW_CHAIN_HEIGHT = Gauge("gateway_chain_height", "Current blockchain height")
+GW_MEMPOOL_SIZE = Gauge("gateway_mempool_size", "Mempool queue size", ["tier"])
 
 
 def on_block_finalized(block, cr):
@@ -131,6 +140,8 @@ async def submit(req: SubmitRequest):
     )
     await ledger.submit_transaction(tx)
     total_ms = (time.perf_counter() - t0) * 1000
+    GW_TX_COUNT.labels(domain=req.domain, tier=str(tier)).inc()
+    GW_TX_LATENCY.labels(domain=req.domain).observe(total_ms / 1000)
     return SubmitResponse(
         tx_id=tx_id,
         priority=priority,
@@ -139,6 +150,16 @@ async def submit(req: SubmitRequest):
         total_latency_ms=round(total_ms, 2),
         explanation=explanation,
     )
+
+
+@app.get("/metrics")
+async def metrics():
+    stats = ledger.get_stats()
+    GW_CHAIN_HEIGHT.set(stats.get("total_blocks", 0))
+    sizes = ledger.mempool.all_sizes()
+    for t in [1, 2, 3]:
+        GW_MEMPOOL_SIZE.labels(tier=str(t)).set(sizes.get(t, sizes.get(str(t), 0)))
+    return PlainTextResponse(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
 @app.get("/chain")

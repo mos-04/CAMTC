@@ -13,6 +13,8 @@ from pathlib import Path
 import httpx
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import PlainTextResponse
+from prometheus_client import Counter, Histogram, Gauge, generate_latest, CONTENT_TYPE_LATEST
 from pydantic import BaseModel
 
 from config import SENSORS
@@ -33,6 +35,12 @@ priority_engine: PriorityEngine = None
 _alerts: deque = deque(maxlen=50)
 _tx_per_sensor: dict = {}
 _sensor_tasks: list = []
+
+# --- Prometheus metrics ---
+IOT_TX_COUNT = Counter("iot_tx_total", "Total IoT transactions submitted", ["sensor_type"])
+IOT_ALERTS_COUNT = Counter("iot_alerts_total", "Total IoT alerts generated", ["sensor_type"])
+IOT_SENSOR_REPUTATION = Gauge("iot_sensor_reputation", "Sensor reputation scores", ["sensor_id"])
+IOT_SUBMIT_LATENCY = Histogram("iot_submit_latency_seconds", "Gateway submission latency", buckets=[0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5])
 
 
 class SensorDataRequest(BaseModel):
@@ -99,8 +107,10 @@ async def _sensor_loop(sensor_id: str, cfg: dict):
             )
             if "error" not in gw:
                 _tx_per_sensor[sensor_id] = _tx_per_sensor.get(sensor_id, 0) + 1
+                IOT_TX_COUNT.labels(sensor_type=sensor_type).inc()
                 if data.is_alert:
                     _alerts.append({"sensor_id": sensor_id, "type": sensor_type, "time": time.time(), "tier": result.tier})
+                    IOT_ALERTS_COUNT.labels(sensor_type=sensor_type).inc()
                     sensor_reputation.reward(sensor_id)
                 else:
                     sensor_reputation.reward(sensor_id)
@@ -187,6 +197,14 @@ async def get_sensors():
 @app.get("/alerts")
 async def get_alerts():
     return list(_alerts)
+
+
+@app.get("/metrics")
+async def metrics():
+    if sensor_reputation:
+        for sid in SENSORS:
+            IOT_SENSOR_REPUTATION.labels(sensor_id=sid).set(sensor_reputation.get(sid))
+    return PlainTextResponse(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
 @app.get("/stats")

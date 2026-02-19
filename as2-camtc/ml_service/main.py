@@ -9,6 +9,8 @@ from contextlib import asynccontextmanager
 import numpy as np
 import torch
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import PlainTextResponse
+from prometheus_client import Counter, Histogram, Gauge, generate_latest, CONTENT_TYPE_LATEST
 from pydantic import BaseModel, Field
 
 from model import PriorityNet, DOMAIN_MAP, assign_tier
@@ -34,6 +36,12 @@ TX_TYPE_INDEX = {
 model: PriorityNet = None
 model_loaded = False
 stored_accuracy: float = 0.0
+
+# --- Prometheus metrics ---
+ML_SCORE_COUNT = Counter("ml_score_requests_total", "Total ML score requests", ["domain", "tier"])
+ML_SCORE_LATENCY = Histogram("ml_score_latency_seconds", "ML scoring latency", ["domain"], buckets=[0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5])
+ML_PRIORITY_HISTOGRAM = Histogram("ml_priority_score", "Distribution of priority scores", ["domain"], buckets=[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.85, 0.9, 0.95, 1.0])
+ML_MODEL_LOADED = Gauge("ml_model_loaded", "Whether the model is loaded (1=yes)")
 
 
 def heuristic_priority(domain: str, urgency: float, value: float, reputation: float, latency_sensitivity: float) -> float:
@@ -134,6 +142,9 @@ async def score(req: ScoreRequest):
             priority, heuristic_pri,
         )
         latency_ms = (time.perf_counter() - t0) * 1000
+        ML_SCORE_COUNT.labels(domain=req.domain.lower(), tier=str(tier)).inc()
+        ML_SCORE_LATENCY.labels(domain=req.domain.lower()).observe(latency_ms / 1000)
+        ML_PRIORITY_HISTOGRAM.labels(domain=req.domain.lower()).observe(priority)
         logger.info("priority=%.3f → tier=%d | latency=%.0fms", priority, tier, latency_ms)
         return ScoreResponse(
             priority=round(priority, 4),
@@ -153,6 +164,12 @@ async def health():
         "model_loaded": model_loaded,
         "accuracy": stored_accuracy,
     }
+
+
+@app.get("/metrics")
+async def metrics():
+    ML_MODEL_LOADED.set(1.0 if model_loaded else 0.0)
+    return PlainTextResponse(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
 @app.get("/domain-weights")
