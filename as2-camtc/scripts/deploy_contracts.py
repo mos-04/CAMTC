@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import sys
+import time
 from pathlib import Path
 
 from web3 import Web3
@@ -83,12 +84,27 @@ def compile_and_deploy(contract_name: str, ganache_url: str, account: str):
     return address
 
 
+def wait_for_ganache(url: str, retries: int = 30, delay: float = 2.0):
+    """Block until Ganache is reachable."""
+    w3 = Web3(HTTPProvider(url))
+    for attempt in range(1, retries + 1):
+        try:
+            if w3.is_connected() and w3.eth.accounts:
+                logger.info("Ganache ready (attempt %d)", attempt)
+                return w3
+        except Exception:
+            pass
+        logger.info("Waiting for Ganache... (%d/%d)", attempt, retries)
+        time.sleep(delay)
+    return None
+
+
 def main():
     ganache_url = os.environ.get("GANACHE_URL", "http://localhost:8545")
     install_solc("0.8.20")
-    w3 = Web3(HTTPProvider(ganache_url))
-    if not w3.eth.accounts:
-        logger.error("No accounts in Ganache")
+    w3 = wait_for_ganache(ganache_url)
+    if w3 is None or not w3.eth.accounts:
+        logger.error("No accounts in Ganache (is it running?)")
         return 1
     account = w3.eth.accounts[0]
     for name in ["HealthcareContract", "FinanceContract", "IoTContract"]:

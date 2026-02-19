@@ -1,13 +1,17 @@
-version: "3.9"
 services:
   ganache:
     image: trufflesuite/ganache:latest
     ports: ["8545:8545"]
     command: >
       --accounts 30 --gasLimit 10000000
-      --deterministic
       --mnemonic "as2 camtc blockchain multi tier consensus system"
     networks: [as2net]
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"const http=require('http');const r=http.request({host:'localhost',port:8545,method:'POST',headers:{'Content-Type':'application/json'}},res=>{let d='';res.on('data',c=>d+=c);res.on('end',()=>process.exit(res.statusCode===200?0:1))});r.write(JSON.stringify({jsonrpc:'2.0',method:'eth_blockNumber',params:[],id:1}));r.end();\""]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
 
   redis:
     image: redis:7-alpine
@@ -40,7 +44,9 @@ services:
 
   deploy_contracts:
     build: .
-    depends_on: [ganache]
+    depends_on:
+      ganache:
+        condition: service_healthy
     volumes: ["./contracts:/app/contracts"]
     environment:
       GANACHE_URL: http://ganache:8545

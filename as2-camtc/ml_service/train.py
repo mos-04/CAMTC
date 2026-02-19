@@ -103,9 +103,9 @@ def main():
     logger.info("device=%s", device)
 
     domain_ids, features, labels = generate_samples(10000)
-    d_id = torch.from_numpy(domain_ids)
-    x = torch.from_numpy(features)
-    y = torch.from_numpy(labels).unsqueeze(1)
+    d_id = torch.from_numpy(domain_ids).long()
+    x = torch.from_numpy(features).float()
+    y = torch.from_numpy(labels).float().unsqueeze(1)
 
     dataset = TensorDataset(d_id, x, y)
     loader = DataLoader(dataset, batch_size=32, shuffle=True, num_workers=0)
