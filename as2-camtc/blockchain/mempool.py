@@ -6,7 +6,7 @@ import logging
 from collections import deque
 from typing import Deque, Dict, List
 
-from block import Transaction
+from blockchain.block import Transaction
 
 logger = logging.getLogger(__name__)
 
