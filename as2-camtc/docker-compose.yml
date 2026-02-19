@@ -1,0 +1,72 @@
+version: "3.9"
+services:
+  ganache:
+    image: trufflesuite/ganache:latest
+    ports: ["8545:8545"]
+    command: >
+      --accounts 30 --gasLimit 10000000
+      --deterministic
+      --mnemonic "as2 camtc blockchain multi tier consensus system"
+    networks: [as2net]
+
+  redis:
+    image: redis:7-alpine
+    ports: ["6379:6379"]
+    networks: [as2net]
+
+  ml_service:
+    build: ./ml_service
+    ports: ["8000:8000"]
+    volumes: ["./ml_service/models:/app/models"]
+    command: >
+      sh -c "python train.py && uvicorn main:app --host 0.0.0.0 --port 8000"
+    networks: [as2net]
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health').read()\" || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+  gateway:
+    build: .
+    ports: ["5000:5000"]
+    environment:
+      GANACHE_URL: http://ganache:8545
+      ML_SERVICE_URL: http://ml_service:8000
+      REDIS_URL: redis://redis:6379
+    depends_on: [ganache, ml_service, redis]
+    command: uvicorn gateway.main:app --host 0.0.0.0 --port 5000 --reload
+    networks: [as2net]
+
+  deploy_contracts:
+    build: .
+    depends_on: [ganache]
+    volumes: ["./contracts:/app/contracts"]
+    environment:
+      GANACHE_URL: http://ganache:8545
+    command: python scripts/deploy_contracts.py
+    networks: [as2net]
+
+  iot_engine:
+    build: ./iot_engine
+    ports: ["9000:9000"]
+    environment:
+      GATEWAY_URL: http://gateway:5000
+      ML_SERVICE_URL: http://ml_service:8000
+    depends_on: [gateway]
+    networks: [as2net]
+
+  prometheus:
+    image: prom/prometheus:latest
+    volumes: ["./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml"]
+    ports: ["9090:9090"]
+    networks: [as2net]
+
+  grafana:
+    image: grafana/grafana:latest
+    ports: ["3000:3000"]
+    networks: [as2net]
+
+networks:
+  as2net:
+    driver: bridge
